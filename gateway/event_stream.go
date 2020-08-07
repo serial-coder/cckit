@@ -42,7 +42,6 @@ func (*ChaincodeEventServerStream) SendHeader(metadata.MD) error {
 }
 
 func (*ChaincodeEventServerStream) SetTrailer(metadata.MD) {
-	return
 }
 
 func (s *ChaincodeEventServerStream) Context() context.Context {
@@ -61,7 +60,12 @@ func (s *ChaincodeEventServerStream) SendMsg(m interface{}) (err error) {
 		}
 	}
 
-	s.events <- e
+	select {
+	case <-s.context.Done():
+		return s.context.Err()
+	case s.events <- e:
+	}
+
 	return nil
 }
 
@@ -70,8 +74,8 @@ func (s *ChaincodeEventServerStream) Recv(e *peer.ChaincodeEvent) error {
 }
 
 func (s *ChaincodeEventServerStream) RecvMsg(m interface{}) error {
-	m, ok := <-s.events
-	if ok {
+	var ok bool
+	if m, ok = <-s.events; ok {
 		return nil
 	}
 	return ErrEventChannelClosed
@@ -83,7 +87,6 @@ func (s *ChaincodeEventServerStream) Events() <-chan *peer.ChaincodeEvent {
 
 func (s *ChaincodeEventServerStream) Close() {
 	s.once.Do(func() {
-		close(s.events)
 		s.ready = false
 	})
 }

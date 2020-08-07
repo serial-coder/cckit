@@ -1,19 +1,18 @@
-package testing
+package testing_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/hyperledger/fabric/protos/peer"
-
-	"github.com/s7techlab/hlf-sdk-go/api"
-
-	"github.com/s7techlab/cckit/examples/cars"
-	examplecert "github.com/s7techlab/cckit/examples/cert"
-	expectcc "github.com/s7techlab/cckit/testing/expect"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
+	"github.com/hyperledger/fabric/protos/peer"
+	"github.com/s7techlab/cckit/examples/cars"
+	idtestdata "github.com/s7techlab/cckit/identity/testdata"
+	testcc "github.com/s7techlab/cckit/testing"
+	expectcc "github.com/s7techlab/cckit/testing/expect"
+	"github.com/s7techlab/hlf-sdk-go/api"
 )
 
 func TestMockstub(t *testing.T) {
@@ -21,34 +20,38 @@ func TestMockstub(t *testing.T) {
 	RunSpecs(t, "Mockstub Suite")
 }
 
-const Channel = `my_channel`
-const ChaincodeName = `cars`
-const ChaincodeProxyName = `cars_proxy`
+var (
+	ids = idtestdata.MustIdentities(idtestdata.Certificates, idtestdata.DefaultMSP)
+
+	Authority = ids[0]
+	Someone   = ids[1]
+)
+
+const (
+	Channel            = `my_channel`
+	ChaincodeName      = `cars`
+	ChaincodeProxyName = `cars_proxy`
+)
 
 var _ = Describe(`Testing`, func() {
 
 	//Create chaincode mocks
-	cc := NewMockStub(ChaincodeName, cars.New())
-	ccproxy := NewMockStub(ChaincodeProxyName, cars.NewProxy(Channel, ChaincodeName))
+	cc := testcc.NewMockStub(ChaincodeName, cars.New())
+	ccproxy := testcc.NewMockStub(ChaincodeProxyName, cars.NewProxy(Channel, ChaincodeName))
 
 	// ccproxy can invoke cc and vice versa
-	mockedPeer := NewPeer().WithChannel(Channel, cc, ccproxy)
-
-	// load actor certificates
-	actors := MustIdentitiesFromFiles(`SOME_MSP`, map[string]string{
-		`authority`: `s7techlab.pem`,
-		`someone`:   `victor-nosov.pem`}, examplecert.Content)
+	mockedPeer := testcc.NewPeer().WithChannel(Channel, cc, ccproxy)
 
 	Describe(`Mockstub`, func() {
 
 		It("Allow to init chaincode", func() {
 			//invoke chaincode method from authority actor
-			expectcc.ResponseOk(cc.From(actors[`authority`]).Init()) // init chaincode from authority
+			expectcc.ResponseOk(cc.From(Authority).Init()) // init chaincode from authority
 		})
 
 		It("Allow to get last event while chaincode invoke ", func() {
 
-			expectcc.ResponseOk(cc.From(actors[`authority`]).Invoke(`carRegister`, cars.Payloads[0]))
+			expectcc.ResponseOk(cc.From(Authority).Invoke(`carRegister`, cars.Payloads[0]))
 			event := expectcc.EventPayloadIs(cc.ChaincodeEvent, &cars.Car{}).(cars.Car)
 
 			Expect(cc.ChaincodeEvent.EventName).To(Equal(cars.CarRegisteredEvent))
@@ -65,7 +68,7 @@ var _ = Describe(`Testing`, func() {
 		})
 
 		It("Allow to get events via events channel", func(done Done) {
-			resp := expectcc.ResponseOk(cc.From(actors[`authority`]).Invoke(`carRegister`, cars.Payloads[1]))
+			resp := expectcc.ResponseOk(cc.From(Authority).Invoke(`carRegister`, cars.Payloads[1]))
 
 			Expect(<-cc.ChaincodeEventsChannel).To(BeEquivalentTo(&peer.ChaincodeEvent{
 				EventName: cars.CarRegisteredEvent,
@@ -84,7 +87,7 @@ var _ = Describe(`Testing`, func() {
 			Expect(len(sub1)).To(Equal(0))
 			Expect(len(sub2)).To(Equal(0))
 
-			resp := expectcc.ResponseOk(cc.From(actors[`authority`]).Invoke(`carRegister`, cars.Payloads[2]))
+			resp := expectcc.ResponseOk(cc.From(Authority).Invoke(`carRegister`, cars.Payloads[2]))
 
 			Expect(len(cc.ChaincodeEventsChannel)).To(Equal(1))
 			Expect(len(sub1)).To(Equal(1))
@@ -119,16 +122,16 @@ var _ = Describe(`Testing`, func() {
 		It("Allow to invoke mocked chaincode ", func(done Done) {
 			ctx := context.Background()
 
-			events, err := mockedPeer.Subscribe(ctx, actors[`authority`], Channel, ChaincodeName)
+			events, err := mockedPeer.Subscribe(ctx, Authority, Channel, ChaincodeName)
 			Expect(err).NotTo(HaveOccurred())
 
 			// double check interface api.Invoker
 			resp, _, err := interface{}(mockedPeer).(api.Invoker).Invoke(
-				ctx, actors[`authority`], Channel, ChaincodeName, `carRegister`,
-				[][]byte{MustJSONMarshal(cars.Payloads[3])}, nil)
+				ctx, Authority, Channel, ChaincodeName, `carRegister`,
+				[][]byte{testcc.MustJSONMarshal(cars.Payloads[3])}, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			carFromCC := MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
+			carFromCC := testcc.MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
 
 			Expect(carFromCC.Id).To(Equal(cars.Payloads[3].Id))
 			Expect(carFromCC.Title).To(Equal(cars.Payloads[3].Title))
@@ -144,11 +147,11 @@ var _ = Describe(`Testing`, func() {
 
 		It("Allow to query mocked chaincode ", func() {
 			resp, err := mockedPeer.Query(
-				context.Background(), actors[`authority`], Channel, ChaincodeName,
+				context.Background(), Authority, Channel, ChaincodeName,
 				`carGet`, [][]byte{[]byte(cars.Payloads[3].Id)}, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			carFromCC := MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
+			carFromCC := testcc.MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
 
 			Expect(carFromCC.Id).To(Equal(cars.Payloads[3].Id))
 			Expect(carFromCC.Title).To(Equal(cars.Payloads[3].Title))
@@ -156,16 +159,14 @@ var _ = Describe(`Testing`, func() {
 
 		It("Allow to query mocked chaincode from chaincode", func() {
 			resp, err := mockedPeer.Query(
-				context.Background(), actors[`authority`], Channel, ChaincodeProxyName,
+				context.Background(), Authority, Channel, ChaincodeProxyName,
 				`carGet`, [][]byte{[]byte(cars.Payloads[3].Id)}, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			carFromCC := MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
+			carFromCC := testcc.MustConvertFromBytes(resp.Payload, &cars.Car{}).(cars.Car)
 
 			Expect(carFromCC.Id).To(Equal(cars.Payloads[3].Id))
 			Expect(carFromCC.Title).To(Equal(cars.Payloads[3].Title))
 		})
-
 	})
-
 })

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"log"
 
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
@@ -10,10 +9,12 @@ import (
 )
 
 type (
+	// Chaincode service interface
 	Chaincode             = ChaincodeServer
 	ChaincodeEventsServer = chaincodeEventsServer
 )
 
+// ChaincodeService implementation based of hlf-sdk-go
 type ChaincodeService struct {
 	sdk api.Core
 }
@@ -22,13 +23,31 @@ func New(sdk api.Core) *ChaincodeService {
 	return &ChaincodeService{sdk: sdk}
 }
 
+func (cs *ChaincodeService) Exec(ctx context.Context, in *ChaincodeExec) (*peer.ProposalResponse, error) {
+	if in.Type == InvocationType_QUERY {
+		return cs.Query(ctx, in.Input)
+	} else if in.Type == InvocationType_INVOKE {
+		return cs.Invoke(ctx, in.Input)
+	} else {
+		return nil, ErrUnknownInvocationType
+	}
+}
+
 func (cs *ChaincodeService) Invoke(ctx context.Context, in *ChaincodeInput) (*peer.ProposalResponse, error) {
 	signer, err := SignerFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	response, _, err := cs.sdk.Channel(in.Channel).Chaincode(in.Chaincode).Invoke(string(in.Args[0])).WithIdentity(signer).ArgBytes(in.Args[1:]).Transient(in.Transient).Do(ctx)
+	response, _, err := cs.sdk.
+		Channel(in.Channel).
+		Chaincode(in.Chaincode).
+		Invoke(string(in.Args[0])).
+		WithIdentity(signer).
+		ArgBytes(in.Args[1:]).
+		Transient(in.Transient).
+		Do(ctx, DoOptionFromContext(ctx)...)
+
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +91,6 @@ func (cs *ChaincodeService) Events(in *ChaincodeLocator, stream Chaincode_Events
 
 	for {
 		e, ok := <-events.Events()
-
-		log.Println(`event received`, e.EventName)
 		if !ok {
 			return nil
 		}

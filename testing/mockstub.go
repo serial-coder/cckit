@@ -5,13 +5,14 @@ import (
 	"crypto/rand"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protos/ledger/queryresult"
 	"github.com/hyperledger/fabric/protos/peer"
-	"github.com/op/go-logging"
+	gologging "github.com/op/go-logging"
 	"github.com/pkg/errors"
 	"github.com/s7techlab/cckit/convert"
 )
@@ -31,6 +32,7 @@ var (
 type MockStub struct {
 	shim.MockStub
 	cc                          shim.Chaincode
+	m                           sync.Mutex
 	mockCreator                 []byte
 	transient                   map[string][]byte
 	ClearCreatorAfterInvoke     bool
@@ -128,7 +130,7 @@ func (stub *MockStub) InvokeChaincode(chaincodeName string, args [][]byte, chann
 	otherStub, exists := stub.InvokablesFull[chaincodeName]
 	if !exists {
 		return shim.Error(fmt.Sprintf(
-			`%s: try to invoke chaincode "%s" in channel "%s" (%s). Available mocked chaincodes are: %s`,
+			`%s	: try to invoke chaincode "%s" in channel "%s" (%s). Available mocked chaincodes are: %s`,
 			ErrChaincodeNotExists, ccName, channel, chaincodeName, stub.MockedPeerChaincodes()))
 	}
 
@@ -204,6 +206,9 @@ func (stub *MockStub) MockQuery(uuid string, args [][]byte) peer.Response {
 
 // MockInvoke
 func (stub *MockStub) MockInvoke(uuid string, args [][]byte) peer.Response {
+	stub.m.Lock()
+	defer stub.m.Unlock()
+
 	// this is a hack here to set MockStub.args, because its not accessible otherwise
 	stub.SetArgs(args)
 
@@ -332,7 +337,7 @@ type PrivateMockStateRangeQueryIterator struct {
 }
 
 // Logger for the shim package.
-var mockLogger = logging.MustGetLogger("mock")
+var mockLogger = gologging.MustGetLogger("mock")
 
 // HasNext returns true if the range query iterator contains additional keys
 // and values.
@@ -376,13 +381,13 @@ func (iter *PrivateMockStateRangeQueryIterator) HasNext() bool {
 
 // Next returns the next key and value in the range query iterator.
 func (iter *PrivateMockStateRangeQueryIterator) Next() (*queryresult.KV, error) {
-	if iter.Closed == true {
+	if iter.Closed {
 		err := errors.New("PrivateMockStateRangeQueryIterator.Next() called after Close()")
 		mockLogger.Errorf("%+v", err)
 		return nil, err
 	}
 
-	if iter.HasNext() == false {
+	if !iter.HasNext() {
 		err := errors.New("PrivateMockStateRangeQueryIterator.Next() called when it does not HaveNext()")
 		mockLogger.Errorf("%+v", err)
 		return nil, err
@@ -409,7 +414,7 @@ func (iter *PrivateMockStateRangeQueryIterator) Next() (*queryresult.KV, error) 
 // Close closes the range query iterator. This should be called when done
 // reading from the iterator to free up resources.
 func (iter *PrivateMockStateRangeQueryIterator) Close() error {
-	if iter.Closed == true {
+	if iter.Closed {
 		err := errors.New("PrivateMockStateRangeQueryIterator.Close() called after Close()")
 		mockLogger.Errorf("%+v", err)
 		return err
@@ -451,13 +456,10 @@ func (iter *PrivateMockStateRangeQueryIterator) Print() {
 
 // PutPrivateData mocked
 func (stub *MockStub) PutPrivateData(collection string, key string, value []byte) error {
-	m, in := stub.PvtState[collection]
-	if !in {
+	if _, in := stub.PvtState[collection]; !in {
 		stub.PvtState[collection] = make(map[string][]byte)
-		m, in = stub.PvtState[collection]
 	}
-
-	m[key] = value
+	stub.PvtState[collection][key] = value
 
 	if _, ok := stub.PrivateKeys[collection]; !ok {
 		stub.PrivateKeys[collection] = list.New()

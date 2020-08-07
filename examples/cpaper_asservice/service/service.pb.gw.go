@@ -104,15 +104,15 @@ func request_CPaper_GetByExternalId_0(ctx context.Context, marshaler runtime.Mar
 
 }
 
-var (
-	filter_CPaper_Issue_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
-)
-
 func request_CPaper_Issue_0(ctx context.Context, marshaler runtime.Marshaler, client CPaperClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var protoReq schema.IssueCommercialPaper
 	var metadata runtime.ServerMetadata
 
-	if err := runtime.PopulateQueryParameters(&protoReq, req.URL.Query(), filter_CPaper_Issue_0); err != nil {
+	newReader, berr := utilities.IOReaderFactory(req.Body)
+	if berr != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
+	}
+	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq); err != nil && err != io.EOF {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
@@ -121,15 +121,15 @@ func request_CPaper_Issue_0(ctx context.Context, marshaler runtime.Marshaler, cl
 
 }
 
-var (
-	filter_CPaper_Buy_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
-)
-
 func request_CPaper_Buy_0(ctx context.Context, marshaler runtime.Marshaler, client CPaperClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var protoReq schema.BuyCommercialPaper
 	var metadata runtime.ServerMetadata
 
-	if err := runtime.PopulateQueryParameters(&protoReq, req.URL.Query(), filter_CPaper_Buy_0); err != nil {
+	newReader, berr := utilities.IOReaderFactory(req.Body)
+	if berr != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
+	}
+	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq); err != nil && err != io.EOF {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
@@ -138,15 +138,15 @@ func request_CPaper_Buy_0(ctx context.Context, marshaler runtime.Marshaler, clie
 
 }
 
-var (
-	filter_CPaper_Redeem_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
-)
-
 func request_CPaper_Redeem_0(ctx context.Context, marshaler runtime.Marshaler, client CPaperClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var protoReq schema.RedeemCommercialPaper
 	var metadata runtime.ServerMetadata
 
-	if err := runtime.PopulateQueryParameters(&protoReq, req.URL.Query(), filter_CPaper_Redeem_0); err != nil {
+	newReader, berr := utilities.IOReaderFactory(req.Body)
+	if berr != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
+	}
+	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq); err != nil && err != io.EOF {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
@@ -375,19 +375,19 @@ func RegisterCPaperHandlerClient(ctx context.Context, mux *runtime.ServeMux, cli
 }
 
 var (
-	pattern_CPaper_List_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"cpaper"}, ""))
+	pattern_CPaper_List_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"cpaper"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_Get_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "issuer", "paper_number"}, ""))
+	pattern_CPaper_Get_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "issuer", "paper_number"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_GetByExternalId_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "extid", "id"}, ""))
+	pattern_CPaper_GetByExternalId_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "extid", "id"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_Issue_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "issue"}, ""))
+	pattern_CPaper_Issue_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "issue"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_Buy_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "buy"}, ""))
+	pattern_CPaper_Buy_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "buy"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_Redeem_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "redeem"}, ""))
+	pattern_CPaper_Redeem_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"cpaper", "redeem"}, "", runtime.AssumeColonVerbOpt(true)))
 
-	pattern_CPaper_Delete_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "issuer", "paper_number"}, ""))
+	pattern_CPaper_Delete_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 1, 0, 4, 1, 5, 2}, []string{"cpaper", "issuer", "paper_number"}, "", runtime.AssumeColonVerbOpt(true)))
 )
 
 var (

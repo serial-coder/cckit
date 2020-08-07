@@ -17,10 +17,11 @@ type (
 		ListWith(schema interface{}, key state.Key) (result interface{}, err error)
 
 		// GetByUniqKey return one entry
+		// Deprecated: use GetByKey
 		GetByUniqKey(schema interface{}, idx string, idxVal []string, target ...interface{}) (result interface{}, err error)
 
-		// GetByUniqKey return list of entries
-		//GetByKey(schema interface{}, key string, keyValue []interface{}) (result interface{}, err error)
+		// GetByKey
+		GetByKey(schema interface{}, idx string, idxVal []string, target ...interface{}) (result interface{}, err error)
 	}
 
 	Impl struct {
@@ -49,6 +50,17 @@ func (s *Impl) Get(entry interface{}, target ...interface{}) (interface{}, error
 	mapped, err := s.mappings.Map(entry)
 	if err != nil { // mapping is not exists
 		return s.state.Get(entry, target...) // return as is
+	}
+
+	// target was not set, but we can knew about target from mapping
+	if len(target) == 0 {
+		var targetFromMapping interface{}
+		if mapped.Mapper().KeyerFor() != nil {
+			targetFromMapping = mapped.Mapper().KeyerFor()
+		} else {
+			targetFromMapping = mapped.Mapper().Schema()
+		}
+		target = append(target, targetFromMapping)
 	}
 
 	return s.state.Get(mapped, target...)
@@ -82,17 +94,51 @@ func (s *Impl) Put(entry interface{}, value ...interface{}) error {
 		return s.state.Put(entry, value...) // return as is
 	}
 
-	keyRefs, err := mapped.Keys() // additional keys
-	if err != nil {
-		return err
-	}
+	// update ref keys
+	if len(mapped.Mapper().Indexes()) > 0 {
+		keyRefs, err := mapped.Keys() // key refs based on current entry value, defined by mapping indexes
+		if err != nil {
+			return errors.Wrap(err, `put mapping key refs`)
+		}
 
-	// delete previous key refs if key exists
+		var insertKeyRefs, deleteKeyRefs []state.KeyValue
+		//get previous entry value
+		prevEntry, err := s.Get(entry)
 
-	// put uniq key refs. if key already exists - error returned
-	for _, kr := range keyRefs {
-		if err = s.state.Put(kr); err != nil {
-			return fmt.Errorf(`%s: %s`, ErrMappingUniqKeyExists, err)
+		if err == nil { // prev exists
+
+			// prev entry exists, calculate refs to delete and to insert
+			prevMapped, err := s.mappings.Map(prevEntry)
+			if err != nil {
+				return errors.Wrap(err, `get prev`)
+			}
+			prevKeyRefs, err := prevMapped.Keys() // key refs based on current entry value, defined by mapping indexes
+			if err != nil {
+				return errors.Wrap(err, `previ keys`)
+			}
+
+			deleteKeyRefs, insertKeyRefs, err = KeyRefsDiff(prevKeyRefs, keyRefs)
+			if err != nil {
+				return errors.Wrap(err, `calculate ref keys diff`)
+			}
+
+		} else {
+			// prev entry not exists, all current key refs should be inserted
+			insertKeyRefs = keyRefs
+		}
+
+		// delete previous key refs if key exists
+		for _, kr := range deleteKeyRefs {
+			if err = s.state.Delete(kr); err != nil {
+				return errors.Wrap(err, `delete previous mapping key ref`)
+			}
+		}
+
+		// insert new key refs
+		for _, kr := range insertKeyRefs {
+			if err = s.state.Insert(kr); err != nil {
+				return fmt.Errorf(`%s: %s`, ErrMappingUniqKeyExists, err)
+			}
 		}
 	}
 
@@ -105,12 +151,12 @@ func (s *Impl) Insert(entry interface{}, value ...interface{}) error {
 		return s.state.Insert(entry, value...) // return as is
 	}
 
-	keyRefs, err := mapped.Keys() // additional keys
+	keyRefs, err := mapped.Keys() // key refs, defined by mapping indexes
 	if err != nil {
 		return err
 	}
 
-	// insert uniq key refs. if key already exists - error returned
+	// insert key refs, if key already exists - error returned
 	for _, kr := range keyRefs {
 		if err = s.state.Insert(kr); err != nil {
 			return fmt.Errorf(`%s: %s`, ErrMappingUniqKeyExists, err)
@@ -153,6 +199,11 @@ func (s *Impl) ListWith(entry interface{}, key state.Key) (result interface{}, e
 
 func (s *Impl) GetByUniqKey(
 	entry interface{}, idx string, idxVal []string, target ...interface{}) (result interface{}, err error) {
+	return s.GetByKey(entry, idx, idxVal, target...)
+}
+
+func (s *Impl) GetByKey(
+	entry interface{}, idx string, idxVal []string, target ...interface{}) (result interface{}, err error) {
 
 	if !s.mappings.Exists(entry) {
 		return nil, ErrStateMappingNotFound
@@ -160,16 +211,40 @@ func (s *Impl) GetByUniqKey(
 
 	keyRef, err := s.state.Get(NewKeyRefIDMapped(entry, idx, idxVal), &schema.KeyRef{})
 	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf(`uniq index: {%s}.%s`, mapKey(entry), idx))
+		return nil, errors.Errorf(`%s: {%s}.%s: %s`, ErrIndexReferenceNotFound, mapKey(entry), idx, err)
 	}
 
 	return s.state.Get(keyRef.(*schema.KeyRef).PKey, target...)
 }
 
-func (s *Impl) Delete(entry interface{}) (err error) {
-	mapped, err := s.mappings.Map(entry)
-	if err != nil { // mapping is not exists
+func (s *Impl) Delete(entry interface{}) error {
+	if !s.mappings.Exists(entry) {
 		return s.state.Delete(entry) // return as is
+	}
+
+	// we need full entry data fro state
+	// AND entry can be record to delete or reference to record
+	// If entry is keyer entity for another entry (reference)
+	entry, err := s.Get(entry)
+	if err != nil {
+		return err
+	}
+
+	mapped, err := s.mappings.Map(entry)
+	if err != nil {
+		return err
+	}
+
+	keyRefs, err := mapped.Keys() // additional keys
+	if err != nil {
+		return err
+	}
+
+	// delete uniq key refs
+	for _, kr := range keyRefs {
+		if err = s.state.Delete(kr); err != nil {
+			return errors.Wrap(err, `delete ref key`)
+		}
 	}
 
 	return s.state.Delete(mapped)

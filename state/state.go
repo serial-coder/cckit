@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hyperledger/fabric/core/chaincode/shim"
+	"github.com/hyperledger/fabric/protos/ledger/queryresult"
 	"github.com/pkg/errors"
 	"github.com/s7techlab/cckit/convert"
 )
@@ -24,8 +25,18 @@ type HistoryEntryList []HistoryEntry
 type (
 	Key []string
 
+	// StateKey stores origin and transformed state key
+	TransformedKey struct {
+		Origin Key
+		Parts  Key
+		String string
+	}
+
 	//KeyerFunc func(string) ([]string, error)
 	KeyFunc func() (Key, error)
+
+	// KeyerFunc transforms string to key
+	KeyerFunc func(string) (Key, error)
 
 	// Keyer interface for entity containing logic of its key creation
 	Keyer interface {
@@ -125,6 +136,10 @@ func (k Key) Append(key Key) Key {
 	return append(k, key...)
 }
 
+func (k Key) String() string {
+	return strings.Join(k, ` | `)
+}
+
 type Impl struct {
 	stub                shim.ChaincodeStubInterface
 	logger              *shim.ChaincodeLogger
@@ -148,16 +163,7 @@ func (s *Impl) Logger() *shim.ChaincodeLogger {
 	return s.logger
 }
 
-func (s *Impl) StringKey(key Key) (string, error) {
-	keyParts, err := s.StateKeyTransformer(key)
-	if err != nil {
-		return ``, err
-	}
-
-	return StringKey(s.stub, keyParts)
-}
-
-func StringKey(stub shim.ChaincodeStubInterface, key Key) (string, error) {
+func KeyToString(stub shim.ChaincodeStubInterface, key Key) (string, error) {
 	switch len(key) {
 	case 0:
 		return ``, ErrKeyPartsLength
@@ -168,27 +174,39 @@ func StringKey(stub shim.ChaincodeStubInterface, key Key) (string, error) {
 	}
 }
 
-func (s *Impl) Key(key interface{}) (string, error) {
-	// normalized key - []string
-	normKey, err := NormalizeStateKey(key)
-	if err != nil {
-		return ``, errors.Wrap(err, `key normalizing`)
+func (s *Impl) Key(key interface{}) (*TransformedKey, error) {
+	var (
+		trKey = &TransformedKey{}
+		err   error
+	)
+
+	if trKey.Origin, err = NormalizeStateKey(key); err != nil {
+		return nil, errors.Wrap(err, `key normalizing`)
 	}
 
-	s.logger.Debugf(`state KEY: %s`, normKey)
-	return s.StringKey(normKey)
+	s.logger.Debugf(`state KEY: %s`, trKey.Origin)
+
+	if trKey.Parts, err = s.StateKeyTransformer(trKey.Origin); err != nil {
+		return nil, err
+	}
+
+	if trKey.String, err = KeyToString(s.stub, trKey.Parts); err != nil {
+		return nil, err
+	}
+
+	return trKey, nil
 }
 
 // Get data by key from state, trying to convert to target interface
-func (s *Impl) Get(key interface{}, config ...interface{}) (interface{}, error) {
-	strKey, err := s.Key(key)
+func (s *Impl) Get(entry interface{}, config ...interface{}) (interface{}, error) {
+	key, err := s.Key(entry)
 	if err != nil {
 		return nil, err
 	}
 
 	//bytes from state
-	s.logger.Debugf(`state GET %s`, strKey)
-	bb, err := s.stub.GetState(strKey)
+	s.logger.Debugf(`state GET %s`, key.String)
+	bb, err := s.stub.GetState(key.String)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +215,7 @@ func (s *Impl) Get(key interface{}, config ...interface{}) (interface{}, error) 
 		if len(config) >= 2 {
 			return config[1], nil
 		}
-		return nil, errors.Wrap(KeyError(strKey), ErrKeyNotFound.Error())
+		return nil, errors.Errorf(`%s: %s`, ErrKeyNotFound, key.Origin)
 	}
 
 	// config[0] - target type
@@ -213,13 +231,13 @@ func (s *Impl) GetInt(key interface{}, defaultValue int) (int, error) {
 }
 
 // GetHistory by key from state, trying to convert to target interface
-func (s *Impl) GetHistory(key interface{}, target interface{}) (HistoryEntryList, error) {
-	strKey, err := s.Key(key)
+func (s *Impl) GetHistory(entry interface{}, target interface{}) (HistoryEntryList, error) {
+	key, err := s.Key(entry)
 	if err != nil {
 		return nil, err
 	}
 
-	iter, err := s.stub.GetHistoryForKey(strKey)
+	iter, err := s.stub.GetHistoryForKey(key.String)
 	if err != nil {
 		return nil, err
 	}
@@ -252,12 +270,12 @@ func (s *Impl) GetHistory(key interface{}, target interface{}) (HistoryEntryList
 
 // Exists check entry with key exists in chaincode state
 func (s *Impl) Exists(entry interface{}) (bool, error) {
-	strKey, err := s.Key(entry)
+	key, err := s.Key(entry)
 	if err != nil {
 		return false, err
 	}
-	s.logger.Debugf(`state check EXISTENCE %s`, strKey)
-	bb, err := s.stub.GetState(strKey)
+	s.logger.Debugf(`state check EXISTENCE %s`, key.String)
+	bb, err := s.stub.GetState(key.String)
 	if err != nil {
 		return false, err
 	}
@@ -327,7 +345,7 @@ func (s *Impl) argKeyValue(arg interface{}, values []interface{}) (key Key, valu
 
 // Put data value in state with key, trying convert data to []byte
 func (s *Impl) Put(entry interface{}, values ...interface{}) error {
-	key, value, err := s.argKeyValue(entry, values)
+	entryKey, value, err := s.argKeyValue(entry, values)
 	if err != nil {
 		return err
 	}
@@ -336,13 +354,13 @@ func (s *Impl) Put(entry interface{}, values ...interface{}) error {
 		return err
 	}
 
-	stringKey, err := s.Key(key)
+	key, err := s.Key(entryKey)
 	if err != nil {
 		return err
 	}
 
-	s.logger.Debugf(`state PUT with string key: %s`, stringKey)
-	return s.stub.PutState(stringKey, bb)
+	s.logger.Debugf(`state PUT with string key: %s`, key.String)
+	return s.stub.PutState(key.String, bb)
 }
 
 // Insert value into chaincode state, returns error if key already exists
@@ -350,8 +368,8 @@ func (s *Impl) Insert(entry interface{}, values ...interface{}) error {
 	if exists, err := s.Exists(entry); err != nil {
 		return err
 	} else if exists {
-		strKey, _ := s.Key(entry)
-		return errors.Wrap(KeyError(strKey), ErrKeyAlreadyExists.Error())
+		key, _ := s.Key(entry)
+		return errors.Errorf(`%s: %s`, ErrKeyAlreadyExists, key.Origin)
 	}
 
 	key, value, err := s.argKeyValue(entry, values)
@@ -362,14 +380,14 @@ func (s *Impl) Insert(entry interface{}, values ...interface{}) error {
 }
 
 // Delete entry from state
-func (s *Impl) Delete(key interface{}) error {
-	strKey, err := s.Key(key)
+func (s *Impl) Delete(entry interface{}) error {
+	key, err := s.Key(entry)
 	if err != nil {
 		return errors.Wrap(err, `deleting from state`)
 	}
 
-	s.logger.Debugf(`state DELETE with string key: %s`, strKey)
-	return s.stub.DelState(strKey)
+	s.logger.Debugf(`state DELETE with string key: %s`, key.String)
+	return s.stub.DelState(key.String)
 }
 
 func (s *Impl) UseKeyTransformer(kt KeyTransformer) State {
@@ -386,35 +404,30 @@ func (s *Impl) UseStatePutTransformer(tb ToBytesTransformer) State {
 	return s
 }
 
-// KeyError error with key
-func KeyError(strKey string) error {
-	return errors.New(strings.Replace(strKey, "\x00", ` | `, -1))
+type stringKeyer struct {
+	str   string
+	keyer KeyerFunc
 }
 
-//type stringKeyer struct {
-//	str   string
-//	keyer KeyerFunc
-//}
-//
-//func (sk stringKeyer) Key() ([]string, error) {
-//	return sk.keyer(sk.str)
-//}
-//
-//// StringKeyer constructor for struct implementing Keyer interface
-//func StringKeyer(str string, keyer KeyerFunc) Keyer {
-//	return stringKeyer{str, keyer}
-//}
+func (sk stringKeyer) Key() (Key, error) {
+	return sk.keyer(sk.str)
+}
+
+// StringKeyer constructor for struct implementing Keyer interface
+func StringKeyer(str string, keyer KeyerFunc) Keyer {
+	return stringKeyer{str, keyer}
+}
 
 // Get data by key from private state, trying to convert to target interface
-func (s *Impl) GetPrivate(collection string, key interface{}, config ...interface{}) (interface{}, error) {
-	strKey, err := s.Key(key)
+func (s *Impl) GetPrivate(collection string, entry interface{}, config ...interface{}) (interface{}, error) {
+	key, err := s.Key(entry)
 	if err != nil {
 		return nil, err
 	}
 
 	//bytes from private state
-	s.logger.Debugf(`private state GET %s`, strKey)
-	bb, err := s.stub.GetPrivateData(collection, strKey)
+	s.logger.Debugf(`private state GET %s`, key.String)
+	bb, err := s.stub.GetPrivateData(collection, key.String)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +436,7 @@ func (s *Impl) GetPrivate(collection string, key interface{}, config ...interfac
 		if len(config) >= 2 {
 			return config[1], nil
 		}
-		return nil, errors.Wrap(KeyError(strKey), ErrKeyNotFound.Error())
+		return nil, errors.Errorf(`%s: %s`, ErrKeyNotFound, key.Origin.String())
 	}
 
 	// config[0] - target type
@@ -432,12 +445,12 @@ func (s *Impl) GetPrivate(collection string, key interface{}, config ...interfac
 
 // PrivateExists check entry with key exists in chaincode private state
 func (s *Impl) ExistsPrivate(collection string, entry interface{}) (bool, error) {
-	strKey, err := s.Key(entry)
+	key, err := s.Key(entry)
 	if err != nil {
 		return false, err
 	}
-	s.logger.Debugf(`private state check EXISTENCE %s`, strKey)
-	bb, err := s.stub.GetPrivateData(collection, strKey)
+	s.logger.Debugf(`private state check EXISTENCE %s`, key.String)
+	bb, err := s.stub.GetPrivateData(collection, key.String)
 	if err != nil {
 		return false, err
 	}
@@ -448,7 +461,7 @@ func (s *Impl) ExistsPrivate(collection string, entry interface{}) (bool, error)
 // Keys -  additional components of composite key
 // If usePrivateDataIterator is true, used private state for iterate over objects
 // if false, used public state for iterate over keys and GetPrivateData for each key
-func (s *Impl) ListPrivate(collection string, usePrivateDataIterator bool, namespace interface{}, target ...interface{}) (result interface{}, err error) {
+func (s *Impl) ListPrivate(collection string, usePrivateDataIterator bool, namespace interface{}, target ...interface{}) (interface{}, error) {
 
 	stateList, err := NewStateList(target...)
 	if err != nil {
@@ -460,8 +473,7 @@ func (s *Impl) ListPrivate(collection string, usePrivateDataIterator bool, names
 	}
 	s.logger.Debugf(`state LIST namespace: %s`, key)
 
-	key, err = s.StateKeyTransformer(key)
-	if err != nil {
+	if key, err = s.StateKeyTransformer(key); err != nil {
 		return nil, err
 	}
 	s.logger.Debugf(`state LIST with composite key: %s`, key)
@@ -480,18 +492,21 @@ func (s *Impl) ListPrivate(collection string, usePrivateDataIterator bool, names
 		return nil, errors.Wrap(err, `create list iterator`)
 	}
 	defer func() { _ = iter.Close() }()
+
+	var (
+		kv       *queryresult.KV
+		objKey   string
+		keyParts []string
+	)
 	for iter.HasNext() {
-		kv, err := iter.Next()
-		if err != nil {
+		if kv, err = iter.Next(); err != nil {
 			return nil, errors.Wrap(err, `get key value`)
 		}
-		objKey, keyParts, err := s.stub.SplitCompositeKey(kv.Key)
-		var curCompositeKey []string
-		curCompositeKey = append(curCompositeKey, objKey)
-		for _, part := range keyParts {
-			curCompositeKey = append(curCompositeKey, part)
+		if objKey, keyParts, err = s.stub.SplitCompositeKey(kv.Key); err != nil {
+			return nil, err
 		}
-		object, err := s.GetPrivate(collection, curCompositeKey, target...)
+
+		object, err := s.GetPrivate(collection, append([]string{objKey}, keyParts...), target...)
 		if err != nil {
 			return nil, err
 		}
@@ -503,7 +518,7 @@ func (s *Impl) ListPrivate(collection string, usePrivateDataIterator bool, names
 
 // Put data value in private state with key, trying convert data to []byte
 func (s *Impl) PutPrivate(collection string, entry interface{}, values ...interface{}) (err error) {
-	key, value, err := s.argKeyValue(entry, values)
+	entryKey, value, err := s.argKeyValue(entry, values)
 	if err != nil {
 		return err
 	}
@@ -512,13 +527,13 @@ func (s *Impl) PutPrivate(collection string, entry interface{}, values ...interf
 		return err
 	}
 
-	stringKey, err := s.Key(key)
+	key, err := s.Key(entryKey)
 	if err != nil {
 		return err
 	}
 
-	s.logger.Debugf(`state PUT with string key: %s`, stringKey)
-	return s.stub.PutPrivateData(collection, stringKey, bb)
+	s.logger.Debugf(`state PUT with string key: %s`, key.String)
+	return s.stub.PutPrivateData(collection, key.String, bb)
 }
 
 // Insert value into chaincode private state, returns error if key already exists
@@ -526,8 +541,8 @@ func (s *Impl) InsertPrivate(collection string, entry interface{}, values ...int
 	if exists, err := s.ExistsPrivate(collection, entry); err != nil {
 		return err
 	} else if exists {
-		strKey, _ := s.Key(entry)
-		return errors.Wrap(KeyError(strKey), ErrKeyAlreadyExists.Error())
+		key, _ := s.Key(entry)
+		return errors.Errorf(`%s: %s`, ErrKeyAlreadyExists, key.Origin)
 	}
 
 	key, value, err := s.argKeyValue(entry, values)
@@ -538,11 +553,11 @@ func (s *Impl) InsertPrivate(collection string, entry interface{}, values ...int
 }
 
 // Delete entry from private state
-func (s *Impl) DeletePrivate(collection string, key interface{}) error {
-	strKey, err := s.Key(key)
+func (s *Impl) DeletePrivate(collection string, entry interface{}) error {
+	key, err := s.Key(entry)
 	if err != nil {
 		return errors.Wrap(err, `deleting from private state`)
 	}
-	s.logger.Debugf(`private state DELETE with string key: %s`, strKey)
-	return s.stub.DelPrivateData(collection, strKey)
+	s.logger.Debugf(`private state DELETE with string key: %s`, key.String)
+	return s.stub.DelPrivateData(collection, key.String)
 }
