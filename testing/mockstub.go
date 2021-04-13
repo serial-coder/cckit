@@ -8,10 +8,11 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/hyperledger/fabric/core/chaincode/shim"
+	"github.com/hyperledger/fabric-chaincode-go/shim"
+	"github.com/hyperledger/fabric-chaincode-go/shimtest"
+	"github.com/hyperledger/fabric-protos-go/ledger/queryresult"
+	"github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/msp"
-	"github.com/hyperledger/fabric/protos/ledger/queryresult"
-	"github.com/hyperledger/fabric/protos/peer"
 	gologging "github.com/op/go-logging"
 	"github.com/pkg/errors"
 	"github.com/s7techlab/cckit/convert"
@@ -28,9 +29,15 @@ var (
 	ErrKeyAlreadyExistsInTransientMap = errors.New(`key already exists in transient map`)
 )
 
+type StateItem struct {
+	Key   string
+	Value []byte
+}
+
 // MockStub replacement of shim.MockStub with creator mocking facilities
 type MockStub struct {
-	shim.MockStub
+	shimtest.MockStub
+	StateBuffer                 []*StateItem
 	cc                          shim.Chaincode
 	m                           sync.Mutex
 	mockCreator                 []byte
@@ -49,13 +56,29 @@ type CreatorTransformer func(...interface{}) (mspID string, certPEM []byte, err 
 // NewMockStub creates chaincode imitation
 func NewMockStub(name string, cc shim.Chaincode) *MockStub {
 	return &MockStub{
-		MockStub: *shim.NewMockStub(name, cc),
+		MockStub: *shimtest.NewMockStub(name, cc),
 		cc:       cc,
 		// by default tx creator data and transient map are cleared after each cc method query/invoke
 		ClearCreatorAfterInvoke: true,
 		InvokablesFull:          make(map[string]*MockStub),
 		PrivateKeys:             make(map[string]*list.List),
 	}
+}
+
+// PutState wrapped functions puts state items in queue and dumps
+// to state after invocation
+func (stub *MockStub) PutState(key string, value []byte) error {
+	if stub.TxID == "" {
+		err := errors.New("cannot PutState without a transactions - call stub.MockTransactionStart()?")
+		return err
+	}
+
+	stub.StateBuffer = append(stub.StateBuffer, &StateItem{
+		Key:   key,
+		Value: value,
+	})
+
+	return nil
 }
 
 // GetArgs mocked args
@@ -75,11 +98,7 @@ func (stub *MockStub) SetEvent(name string, payload []byte) error {
 	}
 
 	stub.ChaincodeEvent = &peer.ChaincodeEvent{EventName: name, Payload: payload}
-	for _, sub := range stub.chaincodeEventSubscriptions {
-		sub <- stub.ChaincodeEvent
-	}
-
-	return stub.MockStub.SetEvent(name, payload)
+	return nil
 }
 
 func (stub *MockStub) EventSubscription() chan *peer.ChaincodeEvent {
@@ -186,22 +205,60 @@ func (stub *MockStub) InitBytes(args ...[]byte) peer.Response {
 
 // MockInit mocked init function
 func (stub *MockStub) MockInit(uuid string, args [][]byte) peer.Response {
+
 	stub.SetArgs(args)
+
 	stub.MockTransactionStart(uuid)
 	res := stub.cc.Init(stub)
 	stub.MockTransactionEnd(uuid)
 
-	if stub.ClearCreatorAfterInvoke {
-		stub.mockCreator = nil
-		stub.transient = nil
-	}
-
 	return res
+}
+
+func (stub *MockStub) DumpStateBuffer() {
+	// dump state buffer to state
+	for i := range stub.StateBuffer {
+		s := stub.StateBuffer[i]
+		_ = stub.MockStub.PutState(s.Key, s.Value)
+	}
+	stub.StateBuffer = nil
+
+	if stub.ChaincodeEvent != nil {
+		// send only last event
+		for _, sub := range stub.chaincodeEventSubscriptions {
+			sub <- stub.ChaincodeEvent
+		}
+
+		// actually no chances to have error here
+		_ = stub.MockStub.SetEvent(stub.ChaincodeEvent.EventName, stub.ChaincodeEvent.Payload)
+	}
 }
 
 // MockQuery
 func (stub *MockStub) MockQuery(uuid string, args [][]byte) peer.Response {
 	return stub.MockInvoke(uuid, args)
+}
+
+func (stub *MockStub) MockTransactionStart(uuid string) {
+	//empty event
+	stub.ChaincodeEvent = nil
+
+	// empty state buffer
+	stub.StateBuffer = nil
+
+	stub.MockStub.MockTransactionStart(uuid)
+}
+
+func (stub *MockStub) MockTransactionEnd(uuid string) {
+
+	stub.DumpStateBuffer()
+
+	stub.MockStub.MockTransactionEnd(uuid)
+
+	if stub.ClearCreatorAfterInvoke {
+		stub.mockCreator = nil
+		stub.transient = nil
+	}
 }
 
 // MockInvoke
@@ -212,18 +269,10 @@ func (stub *MockStub) MockInvoke(uuid string, args [][]byte) peer.Response {
 	// this is a hack here to set MockStub.args, because its not accessible otherwise
 	stub.SetArgs(args)
 
-	//empty event
-	stub.ChaincodeEvent = nil
-
 	// now do the invoke with the correct stub
 	stub.MockTransactionStart(uuid)
 	res := stub.cc.Invoke(stub)
 	stub.MockTransactionEnd(uuid)
-
-	if stub.ClearCreatorAfterInvoke {
-		stub.mockCreator = nil
-		stub.transient = nil
-	}
 
 	return res
 }

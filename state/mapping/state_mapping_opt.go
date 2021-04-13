@@ -6,7 +6,13 @@ import (
 	"strings"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/s7techlab/cckit/state"
+)
+
+const (
+	TimestampKeyLayout = `2006-01-02`
 )
 
 // StateNamespace sets namespace for mapping
@@ -125,17 +131,24 @@ func PKeyer(pkeyer InstanceKeyer) StateMappingOpt {
 	}
 }
 
+func skipField(name string, field reflect.Value) bool {
+	if strings.HasPrefix(name, `XXX_`) || !field.CanSet() {
+		return true
+	}
+	return false
+}
+
+// attrFrom extracts list of field names from struct
 func attrsFrom(schema interface{}) (attrs []string) {
 	// fields from schema
-	s := reflect.ValueOf(schema).Elem().Type()
+	s := reflect.ValueOf(schema).Elem()
+	fs := s.Type()
 	for i := 0; i < s.NumField(); i++ {
-
-		name := s.Field(i).Name
-		if strings.HasPrefix(name, `XXX_`) {
+		field := s.Field(i)
+		if skipField(fs.Field(i).Name, field) {
 			continue
 		}
-
-		attrs = append(attrs, name)
+		attrs = append(attrs, fs.Field(i).Name)
 	}
 	return
 }
@@ -206,19 +219,39 @@ func keysFromValue(v reflect.Value) ([]state.Key, error) {
 	return keys, nil
 }
 
+// keyFromValue creates string representation of value for state key
 func keyFromValue(v reflect.Value) (state.Key, error) {
 	var key state.Key
 
 	if v.Kind() == reflect.Ptr {
-		s := reflect.ValueOf(v.Interface()).Elem().Type()
-		// get all field values from struct
-		for i := 0; i < s.NumField(); i++ {
-			if !strings.HasPrefix(s.Field(i).Name, `XXX_`) {
-				key = append(key, reflect.Indirect(v).Field(i).String())
-			}
-		}
 
-		return key, nil
+		// todo: extract key producer and add custom serializers
+		switch val := v.Interface().(type) {
+
+		case *timestamp.Timestamp:
+			t, err := ptypes.Timestamp(val)
+			if err != nil {
+				return nil, fmt.Errorf(`timestamp key to time: %w`, err)
+			}
+			return state.Key{t.Format(TimestampKeyLayout)}, nil
+
+		default:
+
+			s := reflect.ValueOf(v.Interface()).Elem()
+			fs := s.Type()
+			// get all field values from struct
+			for i := 0; i < s.NumField(); i++ {
+				field := s.Field(i)
+				if skipField(fs.Field(i).Name, field) {
+					continue
+				} else {
+					key = append(key, reflect.Indirect(v).Field(i).String())
+				}
+			}
+
+			return key, nil
+
+		}
 	}
 
 	switch v.Type().String() {

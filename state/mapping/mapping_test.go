@@ -9,7 +9,7 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
-	"github.com/hyperledger/fabric/protos/peer"
+	"github.com/hyperledger/fabric-protos-go/peer"
 	identitytestdata "github.com/s7techlab/cckit/identity/testdata"
 	"github.com/s7techlab/cckit/state"
 	"github.com/s7techlab/cckit/state/mapping"
@@ -53,9 +53,22 @@ var _ = Describe(`Mapping`, func() {
 		create3 := testdata.CreateEntityWithCompositeId[2]
 
 		It("Allow to get mapping data by namespace", func() {
-			mapping, err := testdata.EntityWithCompositeIdStateMapping.GetByNamespace(state.Key{`EntityWithCompositeId`})
+			// key base on entity type
+			baseKey := state.Key{`EntityWithCompositeId`}
+
+			mapping, err := testdata.EntityWithCompositeIdStateMapping.GetByNamespace(baseKey)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mapping.Schema()).To(BeEquivalentTo(&schema.EntityWithCompositeId{}))
+
+			key, err := mapping.PrimaryKey(&schema.EntityWithCompositeId{
+				IdFirstPart:  create1.IdFirstPart,
+				IdSecondPart: create1.IdSecondPart,
+				IdThirdPart:  create1.IdThirdPart,
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(key).To(Equal(
+				baseKey.Append(state.Key{create1.IdFirstPart, create1.IdSecondPart, testdata.Dates[0]})))
 		})
 
 		It("Allow to add data to chaincode state", func(done Done) {
@@ -89,14 +102,18 @@ var _ = Describe(`Mapping`, func() {
 			dataFromCC := compositeIDCC.Query(`get`,
 				&schema.EntityCompositeId{
 					IdFirstPart:  create1.IdFirstPart,
-					IdSecondPart: create1.IdSecondPart},
+					IdSecondPart: create1.IdSecondPart,
+					IdThirdPart:  create1.IdThirdPart,
+				},
 			).Payload
 
 			e := &schema.EntityWithCompositeId{
 				IdFirstPart:  create1.IdFirstPart,
 				IdSecondPart: create1.IdSecondPart,
-				Name:         create1.Name,
-				Value:        create1.Value,
+				IdThirdPart:  create1.IdThirdPart,
+
+				Name:  create1.Name,
+				Value: create1.Value,
 			}
 			Expect(dataFromCC).To(Equal(testcc.MustProtoMarshal(e)))
 		})
@@ -105,6 +122,7 @@ var _ = Describe(`Mapping`, func() {
 			expectcc.ResponseOk(compositeIDCC.Invoke(`update`, &schema.UpdateEntityWithCompositeId{
 				IdFirstPart:  create1.IdFirstPart,
 				IdSecondPart: create1.IdSecondPart,
+				IdThirdPart:  create1.IdThirdPart,
 				Name:         `New name`,
 				Value:        1000,
 			}))
@@ -113,6 +131,7 @@ var _ = Describe(`Mapping`, func() {
 				compositeIDCC.Query(`get`, &schema.EntityCompositeId{
 					IdFirstPart:  create1.IdFirstPart,
 					IdSecondPart: create1.IdSecondPart,
+					IdThirdPart:  create1.IdThirdPart,
 				}),
 				&schema.EntityWithCompositeId{}).(*schema.EntityWithCompositeId)
 
@@ -125,6 +144,7 @@ var _ = Describe(`Mapping`, func() {
 			toDelete := &schema.EntityCompositeId{
 				IdFirstPart:  create1.IdFirstPart,
 				IdSecondPart: create1.IdSecondPart,
+				IdThirdPart:  create1.IdThirdPart,
 			}
 
 			expectcc.ResponseOk(compositeIDCC.Invoke(`delete`, toDelete))
@@ -138,6 +158,10 @@ var _ = Describe(`Mapping`, func() {
 
 		It("Allow to insert entry once more time", func() {
 			expectcc.ResponseOk(compositeIDCC.Invoke(`create`, create1))
+		})
+
+		It("Check entry keying", func() {
+
 		})
 
 	})
@@ -154,7 +178,7 @@ var _ = Describe(`Mapping`, func() {
 
 			// from hyperledger/fabric/core/chaincode/shim/chaincode.go
 			Expect(keys[0]).To(Equal(
-				"\x00" + `EntityWithComplexId` + string(0) + ent1.Id.IdPart1 + string(0) + ent1.Id.IdPart2 + string(0)))
+				"\x00" + `EntityWithComplexId` + string(rune(0)) + ent1.Id.IdPart1 + string(rune(0)) + ent1.Id.IdPart2 + string(rune(0))))
 		})
 
 		It("Allow to get entity", func() {
@@ -184,7 +208,7 @@ var _ = Describe(`Mapping`, func() {
 			Expect(len(keys)).To(Equal(1))
 
 			// from hyperledger/fabric/core/chaincode/shim/chaincode.go
-			Expect(keys[0]).To(Equal("\x00" + `EntityWithSliceId` + string(0) + ent2.Id[0] + string(0) + ent2.Id[1] + string(0)))
+			Expect(keys[0]).To(Equal("\x00" + `EntityWithSliceId` + string(rune(0)) + ent2.Id[0] + string(rune(0)) + ent2.Id[1] + string(rune(0))))
 		})
 
 		It("Allow to get entity", func() {

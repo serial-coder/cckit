@@ -3,8 +3,10 @@ package router
 import (
 	"time"
 
-	"github.com/hyperledger/fabric/core/chaincode/lib/cid"
-	"github.com/hyperledger/fabric/core/chaincode/shim"
+	"go.uber.org/zap"
+
+	"github.com/hyperledger/fabric-chaincode-go/pkg/cid"
+	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/s7techlab/cckit/state"
 )
 
@@ -14,6 +16,8 @@ const DefaultParam = `default`
 type (
 	// Context of chaincode invoke
 	Context interface {
+		Clone() Context
+
 		Stub() shim.ChaincodeStubInterface
 
 		// Client returns invoker ClientIdentity
@@ -21,12 +25,12 @@ type (
 
 		// Response returns response builder
 		Response() Response
-		Logger() *shim.ChaincodeLogger
+		Logger() *zap.Logger
 		Path() string
 		Handler() *HandlerMeta
 		SetHandler(*HandlerMeta)
 		State() state.State
-		UseState(state.State) state.State
+		UseState(state.State) Context
 
 		// Time returns txTimesta
 		Time() (time.Time, error)
@@ -79,13 +83,13 @@ type (
 		SetEvent(string, interface{}) error
 
 		Event() state.Event
-		UseEvent(state.Event) state.Event
+		UseEvent(state.Event) Context
 	}
 
 	context struct {
 		stub    shim.ChaincodeStubInterface
 		handler *HandlerMeta
-		logger  *shim.ChaincodeLogger
+		logger  *zap.Logger
 		state   state.State
 		event   state.Event
 		args    [][]byte
@@ -93,6 +97,18 @@ type (
 		store   InterfaceMap
 	}
 )
+
+// NewContext creates new instance of router.Context
+func NewContext(stub shim.ChaincodeStubInterface, logger *zap.Logger) *context {
+	return &context{
+		stub:   stub,
+		logger: logger,
+	}
+}
+
+func (c *context) Clone() Context {
+	return NewContext(c.stub, c.logger)
+}
 
 func (c *context) Stub() shim.ChaincodeStubInterface {
 	return c.stub
@@ -106,7 +122,7 @@ func (c *context) Response() Response {
 	return ContextResponse{c}
 }
 
-func (c *context) Logger() *shim.ChaincodeLogger {
+func (c *context) Logger() *zap.Logger {
 	return c.logger
 }
 
@@ -132,9 +148,9 @@ func (c *context) State() state.State {
 	return c.state
 }
 
-func (c *context) UseState(s state.State) state.State {
+func (c *context) UseState(s state.State) Context {
 	c.state = s
-	return c.state
+	return c
 }
 
 func (c *context) Event() state.Event {
@@ -144,9 +160,9 @@ func (c *context) Event() state.Event {
 	return c.event
 }
 
-func (c *context) UseEvent(e state.Event) state.Event {
+func (c *context) UseEvent(e state.Event) Context {
 	c.event = e
-	return c.event
+	return c
 }
 
 // Time
